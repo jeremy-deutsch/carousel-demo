@@ -10,7 +10,7 @@ import {
   useTransform,
 } from "framer-motion";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const ITEM_WIDTH = 112;
 const ITEM_HEIGHT = 145;
@@ -20,8 +20,24 @@ const ITEMS_EACH_SIDE = 3;
 const CAROUSEL_WIDTH = 350;
 
 function App() {
-  const dragX = useMotionValue(0);
-  const dragY = useMotionValue(0);
+  // in a real app, you'd lift up useCarouselControls into a parent component
+  const { dragX, activeItemIndex, switchToItem } = useCarouselControls();
+
+  const carouselRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (
+      carouselRef.current &&
+      carouselRef.current.contains(document.activeElement)
+    ) {
+      const carouselItems = carouselRef.current.querySelectorAll<HTMLElement>(
+        ".carousel-slide"
+      );
+      const focusableChild = carouselItems[activeItemIndex].querySelector(
+        "a:not([tabindex='1']), button:not([tabindex='1']), [tabindex='0']"
+      ) as HTMLElement | undefined;
+      focusableChild?.focus();
+    }
+  }, [activeItemIndex]);
 
   const initialDragOffset = useRef(0);
 
@@ -41,31 +57,32 @@ function App() {
           Learn React
         </a>
         <motion.div
-          drag
+          drag="x"
           _dragX={dragX}
-          // just ignore the drag y lol
-          _dragY={dragY}
           dragConstraints={{ left: -(ITEM_WIDTH * (NUM_ITEMS - 1)), right: 0 }}
+          ref={carouselRef}
           style={{
             overflow: "hidden",
             width: CAROUSEL_WIDTH,
             height: ITEM_HEIGHT,
             position: "relative",
             touchAction: "pan-y",
+            WebkitTouchCallout: "none",
+            WebkitUserSelect: "none",
+            MozUserSelect: "none",
+            userSelect: "none",
             // @ts-ignore
-            "-webkit-touch-callout": "none",
-            "-webkit-user-select": "none",
-            "-mox-user-select": "none",
             "-o-user-select": "none",
-            "user-select": "none",
           }}
-          // dragPropagation
           onDragStart={(e, info) => {
             initialDragOffset.current = dragX.get() - info.offset.x;
           }}
           onDragEnd={(e, info) => {
             // snap to an item
-            const totalOffset = info.offset.x + initialDragOffset.current;
+            // we subtract the last delta,
+            // because it sometimes goes haywire on a cancelled drag
+            const totalOffset =
+              info.offset.x - info.delta.x + initialDragOffset.current;
             let endingIndex = Math.round(-totalOffset / ITEM_WIDTH);
 
             // respect forceful swipes
@@ -81,7 +98,26 @@ function App() {
               endingIndex = NUM_ITEMS - 1;
             }
 
-            animate(dragX, endingIndex * -ITEM_WIDTH);
+            switchToItem(endingIndex);
+          }}
+          onKeyDown={(e) => {
+            // handle keyboard controls
+            if (e.key === "ArrowRight" || e.key === "Tab") {
+              switchToItem(activeItemIndex + 1);
+            } else if (e.key === "ArrowLeft") {
+              switchToItem(activeItemIndex - 1);
+            }
+          }}
+          onFocus={(e) => {
+            // check if we've tabbed into the very first slide,
+            // and in that case jump to that slide
+            if (
+              e.currentTarget
+                .querySelector(".carousel-slide")
+                ?.contains(e.target)
+            ) {
+              switchToItem(0);
+            }
           }}
         >
           {Array(NUM_ITEMS)
@@ -128,20 +164,100 @@ function CarouselItem(props: { dragX: MotionValue<number>; index: number }) {
   const zIndex = useTransform(opacity, (o) => Math.round(o * 20));
 
   return (
-    <motion.img
-      src={doritos}
-      height={ITEM_WIDTH}
-      width={ITEM_WIDTH}
+    <motion.div
+      className="carousel-slide"
       style={{
-        width: ITEM_WIDTH,
-        height: ITEM_HEIGHT,
         opacity,
-        pointerEvents: "none",
         scale,
         translateX,
         zIndex,
         position: "absolute",
         left: (CAROUSEL_WIDTH - ITEM_WIDTH) / 2,
+        width: ITEM_WIDTH,
+        height: ITEM_HEIGHT,
+      }}
+    >
+      <a
+        href="https://reactjs.org"
+        target="_blank"
+        rel="noopener noreferrer"
+        draggable={false}
+        onDragStart={(e) => {
+          e.preventDefault();
+        }}
+        onClick={(e) => {
+          if (dragX.isAnimating()) e.preventDefault();
+        }}
+      >
+        <img
+          src={doritos}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+          }}
+          draggable={false}
+        />
+      </a>
+    </motion.div>
+  );
+}
+
+interface CarouselControls {
+  dragX: MotionValue<number>;
+  activeItemIndex: number;
+  switchToItem: (newIndex: number) => void;
+}
+
+// having the state of the carousel in this hook lets the user
+// lift the state out of the carousel itself and have carousel buttons
+function useCarouselControls(): CarouselControls {
+  const dragX = useMotionValue(0);
+
+  const [activeItemIndex, setActiveIndex] = useState(0);
+
+  const switchToItem = (newIndex: number) => {
+    if (newIndex >= 0 && newIndex < NUM_ITEMS) {
+      animate(dragX, newIndex * -ITEM_WIDTH);
+      setActiveIndex(newIndex);
+    }
+  };
+
+  return { dragX, activeItemIndex, switchToItem };
+}
+
+function CarouselButton(
+  props: {
+    controls: CarouselControls;
+    direction: "prev" | "next";
+  } & React.DetailedHTMLProps<
+    React.ButtonHTMLAttributes<HTMLButtonElement>,
+    HTMLButtonElement
+  >
+) {
+  const { controls, direction, ...rest } = props;
+  let disabled = props.disabled;
+  if (direction === "prev" && controls.activeItemIndex <= 0) {
+    disabled = true;
+  } else if (
+    direction === "next" &&
+    controls.activeItemIndex >= NUM_ITEMS - 1
+  ) {
+    disabled = true;
+  }
+  return (
+    <button
+      {...rest}
+      disabled={disabled}
+      onClick={(e) => {
+        if (direction === "prev") {
+          controls.switchToItem(controls.activeItemIndex - 1);
+        } else if (direction === "next") {
+          controls.switchToItem(controls.activeItemIndex + 1);
+        }
+        if (rest.onClick) {
+          rest.onClick(e);
+        }
       }}
     />
   );
