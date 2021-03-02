@@ -10,7 +10,7 @@ import {
   useTransform,
 } from "framer-motion";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 const ITEM_WIDTH = 112;
 const ITEM_HEIGHT = 145;
@@ -57,6 +57,7 @@ function App() {
           Learn React
         </a>
         <motion.div
+          className="carousel-container"
           drag="x"
           _dragX={dragX}
           dragConstraints={{ left: -(ITEM_WIDTH * (NUM_ITEMS - 1)), right: 0 }}
@@ -75,6 +76,8 @@ function App() {
             "-o-user-select": "none",
           }}
           onDragStart={(e, info) => {
+            document.body.style.setProperty("cursor", "grabbing");
+            document.body.style.setProperty("--cursor", "grabbing");
             initialDragOffset.current = dragX.get() - info.offset.x;
           }}
           onDragEnd={(e, info) => {
@@ -99,31 +102,29 @@ function App() {
             }
 
             switchToItem(endingIndex);
+            document.body.style.removeProperty("cursor");
+            document.body.style.removeProperty("--cursor");
           }}
           onKeyDown={(e) => {
             // handle keyboard controls
-            if (e.key === "ArrowRight" || e.key === "Tab") {
+            if (e.key === "ArrowRight") {
               switchToItem(activeItemIndex + 1);
             } else if (e.key === "ArrowLeft") {
               switchToItem(activeItemIndex - 1);
-            }
-          }}
-          onFocus={(e) => {
-            // check if we've tabbed into the very first slide,
-            // and in that case jump to that slide
-            if (
-              e.currentTarget
-                .querySelector(".carousel-slide")
-                ?.contains(e.target)
-            ) {
-              switchToItem(0);
             }
           }}
         >
           {Array(NUM_ITEMS)
             .fill(null)
             .map((_, i) => (
-              <CarouselItem key={i} dragX={dragX} index={i} />
+              <MemoizedCarouselItem
+                key={i}
+                dragX={dragX}
+                index={i}
+                name="Blazin' Buffalo and Ranch Doritos"
+                isInFront={i === activeItemIndex}
+                switchToItem={switchToItem}
+              />
             ))}
         </motion.div>
       </header>
@@ -131,8 +132,17 @@ function App() {
   );
 }
 
-function CarouselItem(props: { dragX: MotionValue<number>; index: number }) {
-  const { dragX, index } = props;
+// this component gets memoized, so make sure its
+// props don't change much (i.e. don't pass the current index)
+function CarouselItem(props: {
+  dragX: MotionValue<number>;
+  index: number;
+  isInFront: boolean;
+  switchToItem: (index: number) => void;
+  name: string;
+}) {
+  const { dragX, index, isInFront, switchToItem } = props;
+
   const minusDragX = useTransform(dragX, (x) => -x);
   const absoluteProgress = useTransform(
     minusDragX,
@@ -145,15 +155,19 @@ function CarouselItem(props: { dragX: MotionValue<number>; index: number }) {
   );
   const opacity = useTransform(absoluteProgress, (p) => 1 - Math.abs(p));
 
+  // we imagine the items are on a semicircle,
+  // so the scale decreases based on how "far" it is from the front
   const scale = useTransform(opacity, (o) => {
     const distanceFromCenter = 1 - o;
 
     // unit circle, pythagorean theorem (thanks, math class)
     const distanceFromFront = 1 - Math.sqrt(1 - distanceFromCenter ** 2);
+    // this is the relative size of the items at the end of the semicircle
     const decreasedScaleAtBack = 0.7;
     return 1 - distanceFromFront * decreasedScaleAtBack;
   });
 
+  // to get the left/right translation, we "curve" the progress around
   const translateX = useTransform(absoluteProgress, (progress) => {
     const radians = ((progress + 1) / 2) * Math.PI;
     const proportionTranslate = Math.cos(radians);
@@ -161,11 +175,16 @@ function CarouselItem(props: { dragX: MotionValue<number>; index: number }) {
     return proportionTranslate * maxTranslateAmount;
   });
 
+  // the closer an item is to the front, the higher its z-index
   const zIndex = useTransform(opacity, (o) => Math.round(o * 20));
 
+  const classNames = ["carousel-slide"];
+  if (isInFront) {
+    classNames.push("in-front");
+  }
   return (
     <motion.div
-      className="carousel-slide"
+      className={classNames.join(" ")}
       style={{
         opacity,
         scale,
@@ -182,11 +201,37 @@ function CarouselItem(props: { dragX: MotionValue<number>; index: number }) {
         target="_blank"
         rel="noopener noreferrer"
         draggable={false}
+        role={!isInFront ? "button" : undefined}
         onDragStart={(e) => {
+          // prevent browsers' default drag/drop behavior
+          // (draggable=false doesn't always work)
+          e.preventDefault();
+        }}
+        onMouseDown={(e) => {
+          // prevent the scroll-on-click on mouse down,
+          // since a user might be initiating a drag
           e.preventDefault();
         }}
         onClick={(e) => {
-          if (dragX.isAnimating()) e.preventDefault();
+          if (dragX.isAnimating()) {
+            // prevent links from being clicked as a drag ends
+            e.preventDefault();
+          } else if (!isInFront) {
+            e.preventDefault();
+            switchToItem(index);
+            e.currentTarget.focus();
+          }
+        }}
+        onKeyUp={(e) => {
+          if (!isInFront && e.key === " ") {
+            // emulate default button spacebar behavior
+            // (this case shouldn't come up, since this becomes a link again on focus)
+            switchToItem(index);
+          }
+        }}
+        onFocus={() => {
+          // keep! focused! items! in! view!
+          switchToItem(index);
         }}
       >
         <img
@@ -196,12 +241,15 @@ function CarouselItem(props: { dragX: MotionValue<number>; index: number }) {
             height: "100%",
             objectFit: "contain",
           }}
+          alt={isInFront ? props.name : `Scroll to ${props.name}`}
           draggable={false}
         />
       </a>
     </motion.div>
   );
 }
+
+const MemoizedCarouselItem = memo(CarouselItem);
 
 interface CarouselControls {
   dragX: MotionValue<number>;
@@ -216,12 +264,15 @@ function useCarouselControls(): CarouselControls {
 
   const [activeItemIndex, setActiveIndex] = useState(0);
 
-  const switchToItem = (newIndex: number) => {
-    if (newIndex >= 0 && newIndex < NUM_ITEMS) {
-      animate(dragX, newIndex * -ITEM_WIDTH);
-      setActiveIndex(newIndex);
-    }
-  };
+  const switchToItem = useCallback(
+    (newIndex: number) => {
+      if (newIndex >= 0 && newIndex < NUM_ITEMS) {
+        animate(dragX, newIndex * -ITEM_WIDTH);
+        setActiveIndex(newIndex);
+      }
+    },
+    [dragX]
+  );
 
   return { dragX, activeItemIndex, switchToItem };
 }

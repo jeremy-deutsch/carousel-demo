@@ -36,3 +36,11 @@
     transform: rotate(360deg);
   }
 }
+
+.carousel-container {
+  cursor: var(--cursor, grab);
+}
+
+.carousel-slide:not(.in-front) a {
+  cursor: var(--cursor);
+}
